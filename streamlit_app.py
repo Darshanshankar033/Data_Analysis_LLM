@@ -8,7 +8,7 @@ st.write(
 
 client = OpenAI(
   base_url="https://openrouter.ai/api/v1",
-  api_key="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",
+  api_key="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",
 )
 
 completion = client.chat.completions.create(
