@@ -1,11 +1,12 @@
 import streamlit as st
+from openai import OpenAI
 
 st.title("🎈 My new app")
 st.write(
     "Let's start building! For help and inspiration, head over to [docs.streamlit.io](https://docs.streamlit.io/)."
 )
 
-from openai import OpenAI
+
 
 client = OpenAI(
   base_url="https://openrouter.ai/api/v1",
