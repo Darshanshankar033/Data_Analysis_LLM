@@ -1,4 +1,4 @@
 streamlit
-pip install langchain_openai
-pip install LLM
-pip install requests openai python-dotenv
+langchain_openai
+LLM
+requests openai python-dotenv
