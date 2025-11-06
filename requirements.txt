@@ -1,4 +1,2 @@
 streamlit
 langchain_openai
-LLM
-requests openai python-dotenv
