@@ -21,7 +21,7 @@ completion = client.chat.completions.create(
   messages=[
               {
                 "role": "user",
-                "content": "What NFL team won the Super Bowl in the year Justin Bieber was born?"
+                "content": st.text_input("Enter your message:")
               }
             ]
 )
