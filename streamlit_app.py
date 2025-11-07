@@ -18,7 +18,7 @@ st.caption("Upload your dataset, connect a database, and chat with AI to explore
 # ---------------------------------
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key="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",
+    api_key="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",
 )
 
 # ---------------------------------
