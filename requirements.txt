@@ -4,3 +4,5 @@ python-dotenv
 PyPDF2
 pandas
 pdfplumber
+matplotlib
+seaborn
