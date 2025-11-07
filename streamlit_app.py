@@ -15,7 +15,7 @@ if "messages" not in st.session_state:
 # --- Initialize OpenRouter Client ---
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key="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"  # Replace with your key
+    api_key="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"  # Replace with your key
 )
 
 # --- File Upload Section ---
@@ -72,7 +72,7 @@ if user_input:
     try:
         with st.spinner("Thinking..."):
             completion = client.chat.completions.create(
-                model="openai/gpt-oss-20b:free",
+                model="google/gemma-3-12b-it:free",
                 messages=st.session_state["messages"],
                 extra_headers={
                     "HTTP-Referer": "https://yourappname.streamlit.app",
