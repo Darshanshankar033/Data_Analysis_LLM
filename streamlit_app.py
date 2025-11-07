@@ -140,7 +140,7 @@ if user_prompt := right_col.chat_input("Ask a question or request a chart (e.g. 
             with st.spinner("🧠 Generating visualization code..."):
                 try:
                     completion = client.chat.completions.create(
-                        model="mistralai/mixtral-8x7b",
+                        model="openai/gpt-oss-20b:free",
                         messages=[{"role": "user", "content": full_prompt}],
                         extra_headers={
                             "HTTP-Referer": "http://localhost:8501",
@@ -175,7 +175,7 @@ if user_prompt := right_col.chat_input("Ask a question or request a chart (e.g. 
             with st.spinner("💬 Thinking..."):
                 try:
                     response = client.chat.completions.create(
-                        model="mistralai/mixtral-8x7b",
+                        model="openai/gpt-oss-20b:free",
                         messages=[{"role": "user", "content": f"{context}\n\nQuestion: {user_prompt}"}],
                         extra_headers={
                             "HTTP-Referer": "http://localhost:8501",
