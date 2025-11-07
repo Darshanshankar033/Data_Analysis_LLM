@@ -3,26 +3,26 @@ from openai import OpenAI
 import pandas as pd
 import pdfplumber
 import io
-import re
+import contextlib
+import matplotlib.pyplot as plt
 
 # ---------------------------------
-# ⚙️ PAGE CONFIGURATION
+# ⚙️ PAGE CONFIG
 # ---------------------------------
 st.set_page_config(page_title="AI Insight Dashboard", page_icon="📊", layout="wide")
-
-st.title("📊 AI Insight Dashboard")
-st.caption("Upload your dataset or document, chat with AI, and ask it to visualize insights dynamically!")
+st.title("📊 AI Insight Dashboard with AI Code Generator")
+st.caption("Upload your data and ask the AI to write and run Python code for visualization or analysis.")
 
 # ---------------------------------
-# 🔑 OPENROUTER CLIENT
+# 🔑 OpenRouter API Setup
 # ---------------------------------
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key="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",  # Inline key
+    api_key="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",
 )
 
 # ---------------------------------
-# 🧭 PAGE LAYOUT — TWO COLUMNS
+# 🧭 PAGE LAYOUT
 # ---------------------------------
 left_col, right_col = st.columns([1, 1])
 
@@ -30,24 +30,19 @@ left_col, right_col = st.columns([1, 1])
 # 📂 FILE UPLOAD SECTION
 # ---------------------------------
 uploaded_file = right_col.file_uploader("📎 Upload a file (CSV, TXT, or PDF):", type=["csv", "txt", "pdf"])
-
 dataframe = None
 file_content = ""
 
 if uploaded_file:
-    file_type = uploaded_file.type
-
-    if file_type == "text/csv":
+    if uploaded_file.type == "text/csv":
         dataframe = pd.read_csv(uploaded_file)
         right_col.success(f"✅ CSV '{uploaded_file.name}' uploaded successfully!")
         right_col.dataframe(dataframe.head(), use_container_width=True)
         file_content = dataframe.to_csv(index=False)
-
-    elif file_type == "text/plain":
+    elif uploaded_file.type == "text/plain":
         file_content = uploaded_file.read().decode("utf-8", errors="ignore")
         right_col.text_area("📄 File Preview", file_content[:1000])
-
-    elif file_type == "application/pdf":
+    elif uploaded_file.type == "application/pdf":
         with pdfplumber.open(uploaded_file) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
@@ -67,7 +62,10 @@ with left_col:
                 summary = client.chat.completions.create(
                     model="openai/gpt-oss-20b:free",
                     messages=[
-                        {"role": "user", "content": f"Provide a clear summary and top insights from the following data:\n\n{file_content[:6000]}"},
+                        {
+                            "role": "user",
+                            "content": f"Provide a brief summary of this dataset or document:\n\n{file_content[:6000]}"
+                        }
                     ],
                     extra_headers={
                         "HTTP-Referer": "http://localhost:8501",
@@ -75,90 +73,86 @@ with left_col:
                     },
                 )
                 insight_text = summary.choices[0].message.content
-                st.success("✅ Insights Generated")
+                st.success("✅ Summary Generated")
                 st.write(insight_text)
             except Exception as e:
-                st.error(f"⚠️ Error while generating insights: {e}")
+                st.error(f"⚠️ Error generating summary: {e}")
     else:
         st.info("Upload a file to generate insights.")
 
 # ---------------------------------
-# 💬 CHAT INTERFACE (RIGHT COLUMN)
+# 💬 CHAT / CODE GENERATOR
 # ---------------------------------
-right_col.subheader("💬 Chat with the AI")
+right_col.subheader("💬 Ask AI to Generate Visualization Code")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display previous messages
+# Display chat history
 for msg in st.session_state.messages:
     with right_col.chat_message(msg["role"]):
         right_col.markdown(msg["content"])
 
-# Chat input (bottom bar)
-if user_input := right_col.chat_input("Ask a question or request a chart (e.g., 'Plot sales vs profit')..."):
-    st.session_state.messages.append({"role": "user", "content": user_input})
-
+# Chat input
+if user_prompt := right_col.chat_input("Ask something like: 'Plot sales vs profit as a bar chart'..."):
+    st.session_state.messages.append({"role": "user", "content": user_prompt})
     with right_col.chat_message("user"):
-        right_col.markdown(user_input)
+        right_col.markdown(user_prompt)
 
+    # Context from file/dataset
     context = ""
     if dataframe is not None:
-        context = f"The dataset columns are: {', '.join(dataframe.columns)}"
+        context = f"The dataset columns are: {', '.join(dataframe.columns)}.\nThe dataframe variable name is 'df'."
     elif file_content:
-        context = f"Here is the uploaded file content:\n{file_content[:4000]}"
+        context = "A text document is uploaded."
 
-    prompt = f"{context}\n\nUser request: {user_input}. If this request sounds like a graph or visualization, respond in the format 'GRAPH: <x_column> vs <y_column> type=<chart_type>' else give text-based answer."
+    # 🔥 Ask LLM to write visualization code
+    full_prompt = f"""
+You are an expert Python data analyst using Streamlit and matplotlib.
+
+A user uploaded a dataset. You are given this information:
+{context}
+
+Write a **Python code snippet only**, no explanations, that performs the user's request:
+'{user_prompt}'
+
+Rules:
+- Assume the dataset is available as a pandas DataFrame called 'df'.
+- Import only necessary libraries (matplotlib, seaborn, pandas).
+- Use matplotlib or seaborn to display charts.
+- Do not include file uploads or print statements.
+- Your code must end with `st.pyplot(plt.gcf())` to render in Streamlit.
+"""
 
     with right_col.chat_message("assistant"):
-        with st.spinner("🤔 Thinking..."):
+        with st.spinner("🧠 Generating code with AI..."):
             try:
-                response = client.chat.completions.create(
+                completion = client.chat.completions.create(
                     model="openai/gpt-oss-20b:free",
-                    messages=[
-                        *st.session_state.messages[:-1],
-                        {"role": "user", "content": prompt},
-                    ],
+                    messages=[{"role": "user", "content": full_prompt}],
                     extra_headers={
                         "HTTP-Referer": "http://localhost:8501",
                         "X-Title": "AI Insight Dashboard",
                     },
                 )
-                answer = response.choices[0].message.content.strip()
+                generated_code = completion.choices[0].message.content
             except Exception as e:
-                answer = f"⚠️ Error: {e}"
+                generated_code = f"# Error: {e}"
 
-            # --- Handle visualization requests ---
-            if answer.startswith("GRAPH:") and dataframe is not None:
+            # --- Show the code ---
+            st.markdown("### 🧩 Generated Python Code:")
+            st.code(generated_code, language="python")
+
+            # --- Try executing the code safely ---
+            if dataframe is not None:
                 try:
-                    # Parse format like "GRAPH: Sales vs Profit type=bar"
-                    pattern = r"GRAPH:\s*(\w+)\s*vs\s*(\w+)\s*type=(\w+)"
-                    match = re.search(pattern, answer, re.IGNORECASE)
-
-                    if match:
-                        x_col, y_col, chart_type = match.groups()
-                        x_col, y_col, chart_type = x_col.strip(), y_col.strip(), chart_type.lower().strip()
-
-                        if x_col in dataframe.columns and y_col in dataframe.columns:
-                            st.success(f"📊 Drawing {chart_type} chart for {x_col} vs {y_col}")
-                            if chart_type == "line":
-                                st.line_chart(dataframe[[x_col, y_col]])
-                            elif chart_type == "bar":
-                                st.bar_chart(dataframe[[x_col, y_col]])
-                            elif chart_type == "area":
-                                st.area_chart(dataframe[[x_col, y_col]])
-                            else:
-                                st.info(f"Unknown chart type '{chart_type}', showing line chart.")
-                                st.line_chart(dataframe[[x_col, y_col]])
-                        else:
-                            st.warning("⚠️ Could not match columns in dataset.")
-                    else:
-                        st.warning("⚠️ Graph request not clearly understood.")
+                    df = dataframe.copy()  # Available to exec() code
+                    safe_locals = {"st": st, "pd": pd, "plt": plt, "df": df}
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        exec(generated_code, {}, safe_locals)
                 except Exception as e:
-                    st.error(f"⚠️ Graph generation error: {e}")
-
+                    st.error(f"⚠️ Error executing generated code: {e}")
             else:
-                # Normal text response
-                right_col.markdown(answer)
+                st.info("⚠️ Please upload a CSV dataset to generate and run visualization code.")
 
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+    st.session_state.messages.append({"role": "assistant", "content": generated_code})
