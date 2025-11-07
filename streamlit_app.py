@@ -15,7 +15,7 @@ if "messages" not in st.session_state:
 # --- Initialize OpenRouter Client ---
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key="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"  # Replace with your key
+    api_key="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"  # Replace with your key
 )
 
 # --- File Upload Section ---
@@ -31,7 +31,7 @@ if uploaded_file:
         st.subheader("📄 CSV Preview")
         st.dataframe(df.head())
         # Convert to string (limit rows to avoid large context)
-        file_content = df.head(10).to_csv(index=False)
+        file_content = df.to_csv(index=False)
 
     # Handle TXT files
     elif uploaded_file.name.endswith(".txt"):
@@ -45,7 +45,7 @@ if uploaded_file:
         text = ""
         for page in pdf_reader.pages:
             text += page.extract_text()
-        file_content = text[:3000]  # Limit to first 3000 chars
+        file_content = text[:4000]  # Limit to first 3000 chars
         st.text_area("📄 Extracted PDF Text", file_content)
 
 # --- Chat Input ---
@@ -72,7 +72,7 @@ if user_input:
     try:
         with st.spinner("Thinking..."):
             completion = client.chat.completions.create(
-                model="google/gemma-3-12b-it:free",
+                model="openai/gpt-oss-20b:free",
                 messages=st.session_state["messages"],
                 extra_headers={
                     "HTTP-Referer": "https://yourappname.streamlit.app",
