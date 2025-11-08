@@ -20,7 +20,7 @@ st.caption("Chat naturally with AI, generate visualizations, or clean your datas
 # -------------------------------
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key="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",  # Replace with your key
+    api_key="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",  # Replace with your key
 )
 
 # -------------------------------
