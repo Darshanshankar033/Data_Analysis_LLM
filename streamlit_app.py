@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import io
 import contextlib
-import re
 
 # =================================================
 # PAGE CONFIG
@@ -20,7 +19,7 @@ st.markdown(
     """
     <h1 style='text-align:center;'>📊 LLM-Powered Interactive Data Analysis & Visualization</h1>
     <p style='text-align:center;color:gray;'>
-    Conversational Analytics • BI-Style Dashboard • AI-Driven Insights
+    Conversational Analytics • AI-Generated BI Dashboard • Power BI–Style Filters
     </p>
     <hr>
     """,
@@ -51,11 +50,8 @@ mode = st.sidebar.radio(
     index=2
 )
 
-st.sidebar.caption(
-    "💬 Chat → text only\n"
-    "🧠 Code → always generate & run code\n"
-    "⚙️ Auto → AI decides"
-)
+auto_build_dashboard = st.sidebar.button("🤖 Auto-Build BI Dashboard")
+clean_data_btn = st.sidebar.button("🧽 Clean Data")
 
 # =================================================
 # LOAD DATA
@@ -68,25 +64,24 @@ if uploaded_file:
         df = pd.read_excel(uploaded_file)
 
 # =================================================
-# DATA CLEANING
+# CLEAN DATA
 # =================================================
-if df is not None:
-    if st.sidebar.button("🧽 Clean Data"):
-        with st.spinner("Cleaning data..."):
-            df = df.drop_duplicates()
-            for col in df.columns:
-                if df[col].dtype in ["int64", "float64"]:
-                    df[col] = df[col].fillna(df[col].mean())
-                else:
-                    df[col] = df[col].fillna(
-                        df[col].mode()[0] if not df[col].mode().empty else "Unknown"
-                    )
-            st.sidebar.success("Data cleaned successfully")
+if df is not None and clean_data_btn:
+    with st.spinner("Cleaning data..."):
+        df = df.drop_duplicates()
+        for col in df.columns:
+            if df[col].dtype in ["int64", "float64"]:
+                df[col] = df[col].fillna(df[col].mean())
+            else:
+                df[col] = df[col].fillna(
+                    df[col].mode()[0] if not df[col].mode().empty else "Unknown"
+                )
+        st.sidebar.success("Data cleaned successfully")
 
 # =================================================
-# DATA METADATA (FULL DATA USED)
+# DATA METADATA
 # =================================================
-def dataset_metadata(df: pd.DataFrame) -> str:
+def dataset_metadata(df):
     return f"""
 Rows: {df.shape[0]}
 Columns: {df.shape[1]}
@@ -102,51 +97,141 @@ Summary Statistics:
 """
 
 # =================================================
+# AI SLICER GENERATOR
+# =================================================
+def generate_slicer_code(df):
+    schema = {
+        "columns": df.columns.tolist(),
+        "dtypes": df.dtypes.astype(str).to_dict()
+    }
+
+    prompt = f"""
+You are a senior BI dashboard developer.
+
+Dataset schema:
+{schema}
+
+Generate Streamlit Python code that:
+- Creates Power BI–style slicers
+- Uses multiselect for categorical columns
+- Uses slider for numeric columns
+- Uses date_input for datetime columns
+- Produces a DataFrame called filtered_df
+- Output ONLY executable Python code
+"""
+
+    response = client.chat.completions.create(
+        model="openai/gpt-oss-20b:free",
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    code = response.choices[0].message.content
+    for fence in ("```python", "```", "`"):
+        code = code.replace(fence, "")
+    return code
+
+# =================================================
+# AI BI DASHBOARD GENERATOR
+# =================================================
+def generate_bi_dashboard_code(filtered_df):
+    schema = {
+        "rows": filtered_df.shape[0],
+        "columns": filtered_df.columns.tolist(),
+        "dtypes": filtered_df.dtypes.astype(str).to_dict()
+    }
+
+    prompt = f"""
+You are a senior BI dashboard architect.
+
+Dataset schema:
+{schema}
+
+Generate Streamlit Python code that:
+- Builds a professional BI dashboard
+- Shows KPI metrics
+- Shows 2–4 charts
+- Uses st.columns() layout
+- Uses matplotlib / seaborn
+- Uses filtered_df
+- Ends charts with st.pyplot(plt.gcf())
+- Output ONLY executable Python code
+"""
+
+    response = client.chat.completions.create(
+        model="openai/gpt-oss-20b:free",
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    code = response.choices[0].message.content
+    for fence in ("```python", "```", "`"):
+        code = code.replace(fence, "")
+    return code
+
+# =================================================
 # MAIN DASHBOARD
 # =================================================
 if df is not None:
 
-    # ---------------- KPI CARDS ----------------
+    # ---------------- AI SLICERS ----------------
+    st.subheader("🎛️ Interactive Filters (AI-Generated)")
+
+    if "slicer_code" not in st.session_state:
+        st.session_state.slicer_code = generate_slicer_code(df)
+
+    try:
+        env = {"st": st, "pd": pd, "df": df.copy()}
+        exec(st.session_state.slicer_code, {}, env)
+        filtered_df = env.get("filtered_df", df)
+    except Exception as e:
+        st.error(f"Slicer error: {e}")
+        filtered_df = df
+
+    # ---------------- KPIs ----------------
     st.subheader("📌 Dataset Overview")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Rows", df.shape[0])
-    c2.metric("Columns", df.shape[1])
-    c3.metric("Numeric Columns", len(df.select_dtypes(include="number").columns))
-    c4.metric("Missing Values", int(df.isnull().sum().sum()))
+    c1.metric("Rows", filtered_df.shape[0])
+    c2.metric("Columns", filtered_df.shape[1])
+    c3.metric("Numeric Columns", len(filtered_df.select_dtypes(include="number").columns))
+    c4.metric("Missing Values", int(filtered_df.isnull().sum().sum()))
 
-    # ---------------- DATA TABLE ----------------
-    with st.expander("🔍 View Dataset (Interactive Table)"):
-        st.dataframe(df, use_container_width=True)
+    # ---------------- TABLE ----------------
+    with st.expander("🔍 View Filtered Dataset"):
+        st.dataframe(filtered_df, use_container_width=True)
 
     # ---------------- AUTO INSIGHTS ----------------
-    st.subheader("🧠 Automated Insights (Full Dataset)")
-    with st.spinner("Generating insights using full dataset metadata..."):
-        meta = dataset_metadata(df)
-        insight_prompt = f"""
+    st.subheader("🧠 Automated Insights")
+    with st.spinner("Generating insights..."):
+        prompt = f"""
 You are a senior data analyst.
 
-Using the dataset metadata below, provide:
-1. High-level summary
-2. Key patterns and trends
-3. Data quality issues
-4. Business insights (if applicable)
-
-Dataset Metadata:
-{meta}
+Provide insights from this dataset:
+{dataset_metadata(filtered_df)}
 """
-        insight_response = client.chat.completions.create(
+        resp = client.chat.completions.create(
             model="openai/gpt-oss-20b:free",
-            messages=[{"role": "user", "content": insight_prompt}],
-            extra_headers={
-                "HTTP-Referer": "http://localhost:8501",
-                "X-Title": "LLM BI Dashboard",
-            },
+            messages=[{"role": "user", "content": prompt}],
         )
-        st.markdown(insight_response.choices[0].message.content)
+        st.markdown(resp.choices[0].message.content)
 
-    # =================================================
-    # CHAT MEMORY
-    # =================================================
+    # ---------------- AI BI DASHBOARD ----------------
+    if auto_build_dashboard:
+        st.subheader("🤖 AI-Built BI Dashboard")
+        if "bi_code" not in st.session_state:
+            st.session_state.bi_code = generate_bi_dashboard_code(filtered_df)
+
+        try:
+            exec_env = {
+                "st": st,
+                "pd": pd,
+                "plt": plt,
+                "sns": sns,
+                "filtered_df": filtered_df.copy(),
+            }
+            exec(st.session_state.bi_code, {}, exec_env)
+        except Exception as e:
+            st.error(f"Dashboard error: {e}")
+
+    # ---------------- CHAT ----------------
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
@@ -156,111 +241,43 @@ Dataset Metadata:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    user_prompt = st.chat_input("Ask questions or request charts (e.g., 'Plot sales vs profit')")
+    user_prompt = st.chat_input("Ask questions or request charts...")
 
     if user_prompt:
-        st.session_state.chat_history.append(
-            {"role": "user", "content": user_prompt}
-        )
-
+        st.session_state.chat_history.append({"role": "user", "content": user_prompt})
         with st.chat_message("user"):
             st.markdown(user_prompt)
 
-        # Decide execution mode
-        viz_keywords = [
-            "plot", "chart", "graph", "visualize", "draw",
-            "bar", "line", "scatter", "histogram", "boxplot", "heatmap"
-        ]
-        wants_code = any(k in user_prompt.lower() for k in viz_keywords)
+        viz_words = ["plot", "chart", "graph", "bar", "line", "scatter", "heatmap"]
+        run_code = (mode == "🧠 Code") or (mode == "⚙️ Auto" and any(w in user_prompt.lower() for w in viz_words))
 
-        run_code = (
-            mode == "🧠 Code" or
-            (mode == "⚙️ Auto" and wants_code)
-        )
-
-        dataset_context = f"Columns: {', '.join(df.columns)}"
-
-        # ---------------- CODE MODE ----------------
         if run_code:
             code_prompt = f"""
-You are an expert Python data analyst.
-
-Dataset info:
-{dataset_context}
-
-Generate ONLY executable Python code (no markdown, no explanation) to perform:
+Generate ONLY Python code using filtered_df to:
 {user_prompt}
-
-Rules:
-- DataFrame name is df
-- Use matplotlib / seaborn
-- End with st.pyplot(plt.gcf())
+End with st.pyplot(plt.gcf())
 """
-            with st.chat_message("assistant"):
-                with st.spinner("Generating and executing visualization code..."):
-                    response = client.chat.completions.create(
-                        model="openai/gpt-oss-20b:free",
-                        messages=[{"role": "user", "content": code_prompt}],
-                        extra_headers={
-                            "HTTP-Referer": "http://localhost:8501",
-                            "X-Title": "LLM BI Dashboard",
-                        },
-                    )
-
-                    generated_code = response.choices[0].message.content.strip()
-
-                    # Clean fences
-                    for fence in ("```python", "```", "`"):
-                        generated_code = generated_code.replace(fence, "")
-
-                    st.markdown("### 🧩 Generated Python Code")
-                    st.code(generated_code, language="python")
-
-                    try:
-                        safe_locals = {
-                            "st": st,
-                            "pd": pd,
-                            "plt": plt,
-                            "sns": sns,
-                            "df": df.copy(),
-                        }
-                        with contextlib.redirect_stdout(io.StringIO()):
-                            exec(generated_code, {}, safe_locals)
-                    except Exception as e:
-                        st.error(f"Error executing code: {e}")
-                        st.text_area("Debug Code", generated_code, height=200)
-
-            st.session_state.chat_history.append(
-                {"role": "assistant", "content": generated_code}
+            resp = client.chat.completions.create(
+                model="openai/gpt-oss-20b:free",
+                messages=[{"role": "user", "content": code_prompt}],
             )
-
-        # ---------------- CHAT MODE ----------------
+            code = resp.choices[0].message.content
+            for fence in ("```python", "```", "`"):
+                code = code.replace(fence, "")
+            st.code(code, language="python")
+            try:
+                exec(code, {}, {"st": st, "pd": pd, "plt": plt, "sns": sns, "filtered_df": filtered_df.copy()})
+            except Exception as e:
+                st.error(e)
+            st.session_state.chat_history.append({"role": "assistant", "content": code})
         else:
-            chat_prompt = f"""
-You are a data analysis assistant.
-
-Dataset Metadata:
-{dataset_metadata(df)}
-
-User Question:
-{user_prompt}
-"""
-            with st.chat_message("assistant"):
-                with st.spinner("Thinking..."):
-                    reply = client.chat.completions.create(
-                        model="openai/gpt-oss-20b:free",
-                        messages=[{"role": "user", "content": chat_prompt}],
-                        extra_headers={
-                            "HTTP-Referer": "http://localhost:8501",
-                            "X-Title": "LLM BI Dashboard",
-                        },
-                    )
-                    answer = reply.choices[0].message.content
-                    st.markdown(answer)
-
-            st.session_state.chat_history.append(
-                {"role": "assistant", "content": answer}
+            resp = client.chat.completions.create(
+                model="openai/gpt-oss-20b:free",
+                messages=[{"role": "user", "content": dataset_metadata(filtered_df) + user_prompt}],
             )
+            answer = resp.choices[0].message.content
+            st.markdown(answer)
+            st.session_state.chat_history.append({"role": "assistant", "content": answer})
 
 else:
-    st.info("⬅️ Upload a dataset from the sidebar to start analysis.")
+    st.info("⬅️ Upload a dataset to start.")
