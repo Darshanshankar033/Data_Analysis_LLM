@@ -3,6 +3,7 @@ import pandas as pd
 from openai import OpenAI
 import matplotlib.pyplot as plt
 import seaborn as sns
+from io import BytesIO
 
 # =================================================
 # PAGE CONFIG
@@ -17,7 +18,7 @@ st.markdown(
     """
     <h1 style='text-align:center;'>📊 LLM-Powered Interactive BI Dashboard</h1>
     <p style='text-align:center;color:gray;'>
-    Conversational Analytics • AI-Generated BI Dashboard • Governance Safe
+    Conversational Analytics • AI-Generated BI Dashboard • Cloud Safe
     </p>
     <hr>
     """,
@@ -56,41 +57,47 @@ if uploaded_file:
         df = pd.read_excel(uploaded_file)
 
 # =================================================
-# METADATA
+# DATA METADATA
 # =================================================
 def dataset_metadata(df):
     return f"""
 Rows: {df.shape[0]}
 Columns: {df.shape[1]}
 
-Column Names:
-{list(df.columns)}
-
-Data Types:
+Column Types:
 {df.dtypes}
+
+Missing Values:
+{df.isnull().sum()}
+
+Summary Statistics:
+{df.describe(include='all')}
 """
 
 # =================================================
-# 🔒 SANITIZER (STRICT)
+# 🔒 SAFETY: BLOCK FILE ACCESS IN AI CODE
 # =================================================
 def sanitize_generated_code(code: str) -> str:
     forbidden = [
-        "read_csv", "read_excel", ".csv", ".xlsx", "open(",
-        "groupby", "value_counts", "reset_index", "agg(",
-        "Frequency", "Count", "Total"
+        "read_csv",
+        "read_excel",
+        ".csv",
+        ".xlsx",
+        "open("
     ]
     for f in forbidden:
         if f in code:
-            raise ValueError(f"❌ Forbidden operation detected: {f}")
+            raise ValueError("Unsafe code detected: file access is not allowed.")
     return code
 
 # =================================================
-# AI BI DASHBOARD GENERATOR (STRICT)
+# AI BI DASHBOARD GENERATOR (FIXED)
 # =================================================
 def generate_bi_dashboard_code(df):
     schema = {
-        "numeric_columns": df.select_dtypes(include="number").columns.tolist(),
-        "categorical_columns": df.select_dtypes(exclude="number").columns.tolist()
+        "rows": df.shape[0],
+        "columns": df.columns.tolist(),
+        "dtypes": df.dtypes.astype(str).to_dict()
     }
 
     prompt = f"""
@@ -100,22 +107,16 @@ Dataset schema:
 {schema}
 
 STRICT RULES (MUST FOLLOW):
-- Use ONLY existing columns
-- DO NOT create new or derived columns
-- DO NOT aggregate data
-- DO NOT use groupby, value_counts, agg
-- Use DataFrame `df` ONLY
-
-ALLOWED VISUALS:
-- Histogram (one numeric column)
-- Boxplot (one numeric column)
-- Scatter plot (two numeric columns)
-- Simple bar chart using ONE categorical column AS-IS
+- Dataset is already loaded as pandas DataFrame `df`
+- DO NOT read files
+- DO NOT use pd.read_csv or pd.read_excel
+- DO NOT reference any filenames
+- ONLY operate on `df`
 
 TASK:
 Generate Streamlit Python code that:
-1. Shows 3–4 KPI metrics using df.shape or df.isnull
-2. Creates 2–3 allowed charts
+1. Displays 3–5 KPI metrics
+2. Creates 2–4 meaningful charts
 3. Uses st.columns() for layout
 4. Uses matplotlib or seaborn
 5. Ends each chart with st.pyplot(plt.gcf())
@@ -139,12 +140,10 @@ if df is not None:
 
     # ---------------- KPIs ----------------
     st.subheader("📌 KPI Summary")
-
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Rows", df.shape[0])
-    k2.metric("Columns", df.shape[1])
-    k3.metric("Numeric Columns", len(df.select_dtypes(include="number").columns))
-    k4.metric("Missing Values", int(df.isnull().sum().sum()))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Rows", df.shape[0])
+    c2.metric("Columns", df.shape[1])
+    c3.metric("Missing Values", int(df.isnull().sum().sum()))
 
     # ---------------- DATA PREVIEW ----------------
     with st.expander("🔍 Dataset Preview"):
@@ -152,19 +151,11 @@ if df is not None:
 
     # ---------------- AI INSIGHTS ----------------
     st.subheader("🧠 AI Insights")
-
-    insight_prompt = f"""
-Provide high-level insights using ONLY the dataset metadata below.
-Do NOT assume any column meaning.
-
-{dataset_metadata(df)}
-"""
-
+    insight_prompt = f"Provide insights for this dataset:\n{dataset_metadata(df)}"
     insights = client.chat.completions.create(
         model="openai/gpt-oss-20b:free",
         messages=[{"role": "user", "content": insight_prompt}],
     ).choices[0].message.content
-
     st.markdown(insights)
 
     # ---------------- AI BI DASHBOARD ----------------
@@ -172,7 +163,7 @@ Do NOT assume any column meaning.
         st.subheader("🤖 AI-Generated BI Dashboard")
 
         if "bi_code" not in st.session_state:
-            with st.spinner("Generating dashboard safely..."):
+            with st.spinner("AI is building the dashboard..."):
                 st.session_state.bi_code = generate_bi_dashboard_code(df)
 
         try:
@@ -183,13 +174,12 @@ Do NOT assume any column meaning.
                 {"st": st, "pd": pd, "plt": plt, "sns": sns, "df": df.copy()}
             )
         except Exception as e:
-            st.error("Dashboard generation blocked due to rule violation.")
+            st.error("Dashboard generation failed due to unsafe AI code.")
             st.exception(e)
 
     # ---------------- CHAT ----------------
     st.subheader("💬 Conversational Analytics")
-
-    user_query = st.chat_input("Ask a question or request a simple chart")
+    user_query = st.chat_input("Ask a question or request a chart")
 
     if user_query:
         if any(k in user_query.lower() for k in ["plot", "chart", "graph"]):
@@ -197,10 +187,8 @@ Do NOT assume any column meaning.
 Generate ONLY Python code using DataFrame `df` to:
 {user_query}
 
-RULES:
-- No aggregation
-- No new columns
-- Use existing columns only
+Rules:
+- Use matplotlib or seaborn
 - End with st.pyplot(plt.gcf())
 """
             code = client.chat.completions.create(
@@ -208,7 +196,7 @@ RULES:
                 messages=[{"role": "user", "content": code_prompt}],
             ).choices[0].message.content
 
-            code = sanitize_generated_code(code.replace("```python", "").replace("```", ""))
+            code = code.replace("```python", "").replace("```", "")
             st.code(code, language="python")
             exec(code, {}, {"st": st, "df": df, "plt": plt, "sns": sns})
 
@@ -219,7 +207,7 @@ RULES:
             ).choices[0].message.content
             st.markdown(reply)
 
-    # ---------------- EXPORT ----------------
+    # ---------------- EXPORT REPORT ----------------
     if export_report:
         report = f"""
 LLM-Powered BI Report
