@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import pdfplumber
 from openai import OpenAI
 
 # =====================================================
-# ⚠️ API CONFIG (HARDCODED AS REQUESTED)
+# API CONFIG (HARDCODED AS REQUESTED)
 # =====================================================
 OPENROUTER_API_KEY = "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"
 MODEL = "openai/gpt-oss-20b:free"
@@ -21,7 +22,6 @@ st.set_page_config(
     page_title="LLM-Powered BI Platform",
     layout="wide"
 )
-
 st.title("🤖 LLM-Powered Data Analysis & BI Platform")
 
 # =====================================================
@@ -40,10 +40,9 @@ def llm(prompt: str) -> str:
         return ""
 
 # =====================================================
-# SANITIZER (FIXES COMMON LLM SYNTAX ERRORS)
+# SANITIZER (LLM SAFETY)
 # =====================================================
 def sanitize_dashboard_code(code: str) -> str:
-    # Fix invalid numeric formatting hallucinations
     code = code.replace(":,.2f", "")
     return code
 
@@ -51,6 +50,9 @@ def sanitize_dashboard_code(code: str) -> str:
 # SESSION STATE
 # =====================================================
 for key in [
+    "file_type",
+    "df",
+    "pdf_text",
     "profile",
     "summary",
     "eda_plan",
@@ -65,19 +67,31 @@ for key in [
 # =====================================================
 st.sidebar.header("⚙️ Controls")
 uploaded_file = st.sidebar.file_uploader(
-    "Upload CSV / Excel", ["csv", "xlsx"]
+    "Upload CSV / Excel / PDF", ["csv", "xlsx", "pdf"]
 )
 
 # =====================================================
-# LOAD DATA
+# LOAD FILE
 # =====================================================
-df = None
 if uploaded_file:
-    df = (
-        pd.read_csv(uploaded_file)
-        if uploaded_file.name.endswith(".csv")
-        else pd.read_excel(uploaded_file)
-    )
+
+    file_name = uploaded_file.name.lower()
+
+    if file_name.endswith(".csv"):
+        st.session_state.df = pd.read_csv(uploaded_file)
+        st.session_state.file_type = "tabular"
+
+    elif file_name.endswith(".xlsx"):
+        st.session_state.df = pd.read_excel(uploaded_file)
+        st.session_state.file_type = "tabular"
+
+    elif file_name.endswith(".pdf"):
+        text = ""
+        with pdfplumber.open(uploaded_file) as pdf:
+            for page in pdf.pages:
+                text += page.extract_text() or ""
+        st.session_state.pdf_text = text[:12000]  # limit tokens
+        st.session_state.file_type = "pdf"
 
 # =====================================================
 # DATA PROFILER
@@ -94,14 +108,16 @@ def profile_agent(df: pd.DataFrame) -> dict:
 # UI SECTIONS
 # =====================================================
 summary_tab, dashboard_tab, chat_tab = st.tabs(
-    ["📌 Dataset Summary", "📊 Interactive Dashboard", "💬 Chatbot"]
+    ["📌 Summary", "📊 Dashboard", "💬 Chat"]
 )
 
 # =====================================================
-# 1️⃣ SUMMARY SECTION (SEQUENTIAL PROMPTING)
+# 1️⃣ SUMMARY
 # =====================================================
-if df is not None:
-    with summary_tab:
+with summary_tab:
+
+    if st.session_state.file_type == "tabular":
+        df = st.session_state.df
 
         if st.session_state.profile is None:
             st.session_state.profile = profile_agent(df)
@@ -109,12 +125,8 @@ if df is not None:
             summary_prompt = f"""
 You are a data analyst.
 
-You have FULL access to the dataset.
-
-Tasks:
-1. Write a concise dataset summary
-2. Highlight key insights
-3. Suggest exactly 3 analytical questions users may ask
+Summarize the dataset, highlight insights,
+and suggest exactly 3 analytical questions.
 
 Dataset Profile:
 {st.session_state.profile}
@@ -122,9 +134,8 @@ Dataset Profile:
             st.session_state.summary = llm(summary_prompt)
 
             eda_prompt = f"""
-Suggest EDA directions using the FULL dataset.
-Aggregations are allowed.
-Do not create new columns.
+Suggest EDA ideas using the FULL dataset.
+Aggregations allowed. No new columns.
 
 Dataset Profile:
 {st.session_state.profile}
@@ -133,103 +144,97 @@ Dataset Profile:
 
         st.markdown(st.session_state.summary)
 
+    elif st.session_state.file_type == "pdf":
+
+        pdf_prompt = f"""
+You are a document analyst.
+
+Summarize the document content and
+suggest 3 questions the user may ask.
+
+Document Text:
+{st.session_state.pdf_text}
+"""
+        st.markdown(llm(pdf_prompt))
+
 # =====================================================
-# 2️⃣ DASHBOARD SECTION (LLM CODE GENERATOR)
+# 2️⃣ DASHBOARD (TABULAR ONLY)
 # =====================================================
-if df is not None:
-    with dashboard_tab:
+with dashboard_tab:
+
+    if st.session_state.file_type == "tabular":
+        df = st.session_state.df
 
         if st.button("🚀 Generate / Refresh Dashboard") or st.session_state.dashboard_code is None:
 
             dashboard_prompt = f"""
 You are a BI dashboard developer.
 
-You have FULL access to pandas DataFrame `df`.
-
-STRICT RULES:
-- Use VALID Python syntax only
-- Use pandas as pd
-- Use Plotly Express as px
-- Aggregations ARE allowed
-- If formatting numbers, use f-strings
-  Example:
-    total = df['Sales'].sum()
-    st.metric("Total Sales", f"{total:,.2f}")
-
-FORBIDDEN:
-- File access
-- Invalid formatting syntax
-- Non-Python expressions
+DataFrame name: df
+Use valid Python only.
+All variables must be defined.
 
 TASK:
-1. Create 3–5 KPI cards using st.metric
-2. Create 2–3 interactive Plotly charts
-3. Use the full dataset
-4. Output ONLY executable Python code
+- 3–5 KPI cards using st.metric
+- 2–3 Plotly charts
+- Aggregations allowed
+- Output ONLY executable Python code
 """
-
             st.session_state.dashboard_code = llm(dashboard_prompt)
 
         try:
-            safe_code = sanitize_dashboard_code(
-                st.session_state.dashboard_code
-            )
             exec(
-                safe_code,
+                sanitize_dashboard_code(st.session_state.dashboard_code),
                 {},
                 {"st": st, "df": df, "px": px, "pd": pd}
             )
         except Exception as e:
-            st.error("❌ Dashboard execution failed")
+            st.error("Dashboard execution failed")
             st.exception(e)
 
-# =====================================================
-# 3️⃣ CHATBOT SECTION (FULL DATA ACCESS)
-# =====================================================
-if df is not None:
-    with chat_tab:
+    else:
+        st.info("📄 Dashboards are not applicable for PDF documents.")
 
-        for msg in st.session_state.chat_history:
-            st.chat_message(msg["role"]).markdown(msg["content"])
+# =====================================================
+# 3️⃣ CHAT
+# =====================================================
+with chat_tab:
 
-        user_input = st.chat_input(
-            "Ask questions like total sales, inventory, trends, or regenerate dashboard"
+    for msg in st.session_state.chat_history:
+        st.chat_message(msg["role"]).markdown(msg["content"])
+
+    user_input = st.chat_input("Ask questions about the data or document")
+
+    if user_input:
+        st.session_state.chat_history.append(
+            {"role": "user", "content": user_input}
         )
 
-        if user_input:
-            st.session_state.chat_history.append(
-                {"role": "user", "content": user_input}
-            )
-
+        if st.session_state.file_type == "tabular":
             chat_prompt = f"""
-You are a conversational data assistant.
+You are a data assistant.
 
-You have FULL access to the pandas DataFrame `df`.
+You have FULL access to the pandas DataFrame df.
 
-Chat History:
-{st.session_state.chat_history}
-
-User Query:
+User Question:
 {user_input}
+"""
+        else:
+            chat_prompt = f"""
+You are a document assistant.
 
-Rules:
-- Use valid Python logic
-- Aggregations allowed
-- If user asks to regenerate dashboard, return EXACTLY: REGENERATE_DASHBOARD
-- Otherwise, explain insights clearly
+Answer based ONLY on the document text.
+
+Document Text:
+{st.session_state.pdf_text}
+
+User Question:
+{user_input}
 """
 
-            reply = llm(chat_prompt)
+        reply = llm(chat_prompt)
 
-            if "REGENERATE_DASHBOARD" in reply:
-                st.session_state.dashboard_code = None
-                reply = "✅ Dashboard regenerated based on your request."
-
-            st.session_state.chat_history.append(
-                {"role": "assistant", "content": reply}
-            )
-
-            st.chat_message("assistant").markdown(reply)
-
-else:
-    st.info("⬅️ Upload a dataset to begin.")
+        st.session_state.chat_history.append(
+            {"role": "assistant", "content": reply}
+        )
+        st.chat_message("assistant").markdown(reply)
