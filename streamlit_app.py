@@ -40,11 +40,18 @@ def llm(prompt: str) -> str:
         return ""
 
 # =====================================================
+# SANITIZER (FIXES COMMON LLM SYNTAX ERRORS)
+# =====================================================
+def sanitize_dashboard_code(code: str) -> str:
+    # Fix invalid numeric formatting hallucinations
+    code = code.replace(":,.2f", "")
+    return code
+
+# =====================================================
 # SESSION STATE
 # =====================================================
 for key in [
     "profile",
-    "top10",
     "summary",
     "eda_plan",
     "dashboard_code",
@@ -91,61 +98,43 @@ summary_tab, dashboard_tab, chat_tab = st.tabs(
 )
 
 # =====================================================
-# 1️⃣ SUMMARY SECTION (TOP 10 + PROFILE)
+# 1️⃣ SUMMARY SECTION (SEQUENTIAL PROMPTING)
 # =====================================================
 if df is not None:
     with summary_tab:
 
         if st.session_state.profile is None:
             st.session_state.profile = profile_agent(df)
-            st.session_state.top10 = df.head(10)
 
             summary_prompt = f"""
 You are a data analyst.
 
-You are given:
-1. Dataset profile (schema-level information)
-2. Top 10 rows of the dataset (sample)
+You have FULL access to the dataset.
 
-Your tasks:
-- Summarize the dataset
-- Highlight key patterns or issues visible from the sample
-- Suggest exactly 3 analytical questions
+Tasks:
+1. Write a concise dataset summary
+2. Highlight key insights
+3. Suggest exactly 3 analytical questions users may ask
 
 Dataset Profile:
 {st.session_state.profile}
-
-Top 10 Rows:
-{st.session_state.top10.to_string(index=False)}
 """
-
             st.session_state.summary = llm(summary_prompt)
 
             eda_prompt = f"""
-Based ONLY on:
-- Dataset profile
-- Top 10 rows
-
-Suggest EDA directions.
-Do NOT assume full data distribution.
-Do NOT aggregate or create new columns.
+Suggest EDA directions using the FULL dataset.
+Aggregations are allowed.
+Do not create new columns.
 
 Dataset Profile:
 {st.session_state.profile}
-
-Top 10 Rows:
-{st.session_state.top10.to_string(index=False)}
 """
             st.session_state.eda_plan = llm(eda_prompt)
 
-        st.markdown("### 🔍 Dataset Sample (Top 10 Rows)")
-        st.dataframe(st.session_state.top10, use_container_width=True)
-
-        st.markdown("### 🧠 AI Summary & Insights")
         st.markdown(st.session_state.summary)
 
 # =====================================================
-# 2️⃣ DASHBOARD SECTION (UNCHANGED)
+# 2️⃣ DASHBOARD SECTION (LLM CODE GENERATOR)
 # =====================================================
 if df is not None:
     with dashboard_tab:
@@ -155,37 +144,38 @@ if df is not None:
             dashboard_prompt = f"""
 You are a BI dashboard developer.
 
-You are given:
-- Dataset profile
-- Top 10 rows
-- EDA plan
+You have FULL access to pandas DataFrame `df`.
 
-RULES:
-- Use Plotly Express
-- DataFrame name: df
-- pandas available as pd
-- No aggregation
-- No new columns
-- No file access
-- Create KPI cards using st.metric
-- Create 2–3 interactive charts
-- Output ONLY executable Python code
+STRICT RULES:
+- Use VALID Python syntax only
+- Use pandas as pd
+- Use Plotly Express as px
+- Aggregations ARE allowed
+- If formatting numbers, use f-strings
+  Example:
+    total = df['Sales'].sum()
+    st.metric("Total Sales", f"{total:,.2f}")
 
-Dataset Profile:
-{st.session_state.profile}
+FORBIDDEN:
+- File access
+- Invalid formatting syntax
+- Non-Python expressions
 
-Top 10 Rows:
-{st.session_state.top10.to_string(index=False)}
-
-EDA Plan:
-{st.session_state.eda_plan}
+TASK:
+1. Create 3–5 KPI cards using st.metric
+2. Create 2–3 interactive Plotly charts
+3. Use the full dataset
+4. Output ONLY executable Python code
 """
 
             st.session_state.dashboard_code = llm(dashboard_prompt)
 
         try:
+            safe_code = sanitize_dashboard_code(
+                st.session_state.dashboard_code
+            )
             exec(
-                st.session_state.dashboard_code,
+                safe_code,
                 {},
                 {"st": st, "df": df, "px": px, "pd": pd}
             )
@@ -194,7 +184,7 @@ EDA Plan:
             st.exception(e)
 
 # =====================================================
-# 3️⃣ CHATBOT (PROMPT-RETRIEVAL BASED)
+# 3️⃣ CHATBOT SECTION (FULL DATA ACCESS)
 # =====================================================
 if df is not None:
     with chat_tab:
@@ -203,7 +193,7 @@ if df is not None:
             st.chat_message(msg["role"]).markdown(msg["content"])
 
         user_input = st.chat_input(
-            "Ask about the dataset, sample, or request a plot"
+            "Ask questions like total sales, inventory, trends, or regenerate dashboard"
         )
 
         if user_input:
@@ -212,30 +202,28 @@ if df is not None:
             )
 
             chat_prompt = f"""
-You are a dataset assistant.
+You are a conversational data assistant.
 
-You can answer ONLY using:
-- Dataset profile
-- Top 10 rows
-- Previous chat context
-
-If a question cannot be answered reliably from this information,
-explicitly say so.
-
-Dataset Profile:
-{st.session_state.profile}
-
-Top 10 Rows:
-{st.session_state.top10.to_string(index=False)}
+You have FULL access to the pandas DataFrame `df`.
 
 Chat History:
 {st.session_state.chat_history}
 
-User Question:
+User Query:
 {user_input}
+
+Rules:
+- Use valid Python logic
+- Aggregations allowed
+- If user asks to regenerate dashboard, return EXACTLY: REGENERATE_DASHBOARD
+- Otherwise, explain insights clearly
 """
 
             reply = llm(chat_prompt)
+
+            if "REGENERATE_DASHBOARD" in reply:
+                st.session_state.dashboard_code = None
+                reply = "✅ Dashboard regenerated based on your request."
 
             st.session_state.chat_history.append(
                 {"role": "assistant", "content": reply}
