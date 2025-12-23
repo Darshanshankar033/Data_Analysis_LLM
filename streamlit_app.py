@@ -15,7 +15,7 @@ MODEL = "openai/gpt-oss-20b:free"
 
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key="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"
+    api_key=st.secrets["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"]
 )
 
 # Email config (SMTP)
