@@ -5,14 +5,18 @@ import pdfplumber
 from openai import OpenAI
 
 # =====================================================
-# API CONFIG
+# API CONFIG (OPENROUTER)
 # =====================================================
 OPENROUTER_API_KEY = "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"
 MODEL = "openai/gpt-oss-20b:free"
 
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_API_KEY
+    api_key=OPENROUTER_API_KEY,
+    default_headers={
+        "HTTP-Referer": "http://localhost:8501",
+        "X-Title": "AI BI Dashboard"
+    }
 )
 
 # =====================================================
@@ -22,7 +26,7 @@ st.set_page_config(page_title="AI BI Dashboard", layout="wide")
 st.title("🤖 AI-Generated BI Dashboard")
 
 # =====================================================
-# THEME PREVIEW
+# DARK / LIGHT PREVIEW MODE
 # =====================================================
 dark_mode = st.sidebar.toggle("🌙 Dark Mode Preview", value=False)
 
@@ -32,7 +36,7 @@ if dark_mode:
     .stApp { background:#0f1021; color:white; }
     .card { background:#1c1d3a; border-radius:14px; padding:20px;
             box-shadow:0 4px 20px rgba(0,0,0,.6); margin-bottom:20px; }
-    .section-title { color:#e4e4ff; font-weight:600; }
+    .section-title { color:#e4e4ff; font-size:18px; font-weight:600; }
     </style>
     """, unsafe_allow_html=True)
 else:
@@ -41,26 +45,36 @@ else:
     .stApp { background:#f6f7fb; }
     .card { background:white; border-radius:14px; padding:20px;
             box-shadow:0 4px 18px rgba(0,0,0,.06); margin-bottom:20px; }
-    .section-title { color:#222; font-weight:600; }
+    .section-title { color:#222; font-size:18px; font-weight:600; }
     </style>
     """, unsafe_allow_html=True)
 
 # =====================================================
-# LLM CALL
+# SAFE LLM CALL
 # =====================================================
 def llm(prompt: str) -> str:
-    res = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return res.choices[0].message.content.strip()
+    try:
+        res = client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return res.choices[0].message.content.strip()
+    except Exception as e:
+        st.error("LLM authentication / quota error")
+        st.exception(e)
+        return ""
 
 # =====================================================
-# SANITIZER
+# SANITIZER (CRITICAL)
 # =====================================================
 def sanitize(code: str) -> str:
     if "```" in code:
         code = code.replace("```python", "").replace("```", "")
+    # strip unsupported plotly features
+    code = code.replace("trendline='ols'", "")
+    code = code.replace('trendline="ols"', "")
+    code = code.replace("trendline='lowess'", "")
+    code = code.replace('trendline="lowess"', "")
     return code.strip()
 
 # =====================================================
@@ -74,17 +88,21 @@ for k in ["file_type", "df", "pdf_text", "dashboard_code", "chat"]:
 # FILE UPLOAD
 # =====================================================
 uploaded = st.sidebar.file_uploader(
-    "Upload CSV / Excel / PDF", ["csv", "xlsx", "pdf"]
+    "Upload CSV / Excel / PDF",
+    ["csv", "xlsx", "pdf"]
 )
 
 if uploaded:
     name = uploaded.name.lower()
+
     if name.endswith(".csv"):
         st.session_state.df = pd.read_csv(uploaded)
         st.session_state.file_type = "tabular"
+
     elif name.endswith(".xlsx"):
         st.session_state.df = pd.read_excel(uploaded)
         st.session_state.file_type = "tabular"
+
     elif name.endswith(".pdf"):
         text = ""
         with pdfplumber.open(uploaded) as pdf:
@@ -94,13 +112,13 @@ if uploaded:
         st.session_state.file_type = "pdf"
 
 # =====================================================
-# SAFE SLICERS (SYSTEM-CONTROLLED)
+# SYSTEM-CONTROLLED SLICERS (POWER BI STYLE)
 # =====================================================
-def apply_slicers(df):
+def apply_slicers(df: pd.DataFrame) -> pd.DataFrame:
     st.markdown("<div class='section-title'>Filters</div>", unsafe_allow_html=True)
     filtered = df.copy()
 
-    for col in df.columns[:3]:
+    for col in df.columns[:3]:  # limit slicers for stability
         if pd.api.types.is_numeric_dtype(df[col]):
             mn, mx = float(df[col].min()), float(df[col].max())
             rng = st.slider(col, mn, mx, (mn, mx))
@@ -112,28 +130,44 @@ def apply_slicers(df):
     return filtered
 
 # =====================================================
-# TABS
+# UI TABS
 # =====================================================
 summary_tab, dashboard_tab, chat_tab = st.tabs(
     ["📌 Summary", "📊 Dashboard", "💬 Chat"]
 )
 
 # =====================================================
-# SUMMARY
+# SUMMARY TAB
 # =====================================================
 with summary_tab:
     if st.session_state.file_type == "tabular":
         df = st.session_state.df
-        st.markdown(llm(
-            f"Summarize the dataset and suggest 3 business questions.\nColumns: {list(df.columns)}"
-        ))
+        st.markdown(
+            llm(
+                f"""
+You are a data analyst.
+
+Summarize the dataset and suggest exactly 3 business questions.
+
+Columns: {list(df.columns)}
+Rows: {len(df)}
+"""
+            )
+        )
     elif st.session_state.file_type == "pdf":
-        st.markdown(llm(
-            f"Summarize this document:\n{st.session_state.pdf_text}"
-        ))
+        st.markdown(
+            llm(
+                f"""
+Summarize the document and suggest 3 questions.
+
+Document:
+{st.session_state.pdf_text}
+"""
+            )
+        )
 
 # =====================================================
-# DASHBOARD (LLM CODE → EXECUTION)
+# DASHBOARD TAB (LLM CODE → EXECUTION)
 # =====================================================
 with dashboard_tab:
     if st.session_state.file_type == "tabular":
@@ -145,7 +179,6 @@ with dashboard_tab:
         else:
             if st.button("🚀 Generate Dashboard") or st.session_state.dashboard_code is None:
 
-                # ✅ DEFINE PROMPT BEFORE USE (FIX)
                 dashboard_prompt = """
 You are a BI dashboard developer.
 
@@ -154,20 +187,23 @@ DATA:
 
 ABSOLUTE RULES:
 - DO NOT assume column names
-- Dynamically select columns
-  num_cols = filtered_df.select_dtypes(include='number').columns
-  cat_cols = filtered_df.select_dtypes(exclude='number').columns
+- Detect columns dynamically:
+    num_cols = filtered_df.select_dtypes(include='number').columns
+    cat_cols = filtered_df.select_dtypes(exclude='number').columns
+- DO NOT use trendlines, regression, statsmodels, sklearn
+- Use Plotly Express only: bar, line, scatter (no trendline), pie, histogram
+- All variables must be defined
+- NO markdown fences
 
-STYLE:
-- Use <div class="card">
+STYLE RULES:
+- Wrap visuals in <div class="card">
 - Use <div class="section-title">
-- Use st.columns layout
-- Use Plotly Express
+- Use st.columns for layout
 
 TASK:
-1. 3 KPI cards using numeric columns
-2. 1 main chart
-3. 1–2 secondary charts
+1. Create 3 KPI cards from numeric columns
+2. Create 1 main chart
+3. Create 1–2 secondary charts
 
 Output ONLY executable Python code.
 """
@@ -181,7 +217,12 @@ Output ONLY executable Python code.
                     exec(
                         sanitize(st.session_state.dashboard_code),
                         {},
-                        {"st": st, "filtered_df": filtered_df, "px": px, "pd": pd}
+                        {
+                            "st": st,
+                            "filtered_df": filtered_df,
+                            "px": px,
+                            "pd": pd,
+                        },
                     )
                 except Exception as e:
                     st.error("Dashboard execution failed")
@@ -191,7 +232,7 @@ Output ONLY executable Python code.
         st.info("Dashboards are not supported for PDFs.")
 
 # =====================================================
-# CHAT (HUMAN LANGUAGE ONLY)
+# CHAT TAB (HUMAN LANGUAGE ONLY)
 # =====================================================
 with chat_tab:
     for m in st.session_state.chat:
@@ -201,7 +242,34 @@ with chat_tab:
 
     if q:
         st.session_state.chat.append({"role": "user", "content": q})
-        ans = llm(f"Answer in clear human language:\n{q}")
+
+        if st.session_state.file_type == "tabular":
+            prompt = f"""
+You are a business analyst.
+
+Answer the question in clear human language.
+Use the dataset internally.
+DO NOT show code.
+
+Question:
+{q}
+"""
+        else:
+            prompt = f"""
+Answer using the document only.
+
+Document:
+{st.session_state.pdf_text}
+
+Question:
+{q}
+"""
+
+        ans = llm(prompt)
+
+        if "```" in ans or "df[" in ans:
+            ans = "Here is the answer in simple terms:\n\n" + ans.replace("```", "")
+
         st.session_state.chat.append({"role": "assistant", "content": ans})
         st.chat_message("assistant").markdown(ans)
 
@@ -209,4 +277,4 @@ with chat_tab:
 # EMPTY STATE
 # =====================================================
 if not uploaded:
-    st.info("⬅️ Upload a file to begin.")
+    st.info("⬅️ Upload a CSV, Excel, or PDF to begin.")
