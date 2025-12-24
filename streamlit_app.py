@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import pdfplumber
+import yfinance as yf
+import requests
 from openai import OpenAI
 
 # =====================================================
@@ -23,10 +25,10 @@ client = OpenAI(
 # STREAMLIT CONFIG
 # =====================================================
 st.set_page_config(page_title="AI BI Dashboard", layout="wide")
-st.title("🤖 AI-Generated BI Dashboard")
+st.title("🤖 AI-Powered BI Dashboard")
 
 # =====================================================
-# DARK / LIGHT PREVIEW MODE
+# DARK / LIGHT PREVIEW
 # =====================================================
 dark_mode = st.sidebar.toggle("🌙 Dark Mode Preview", value=False)
 
@@ -36,7 +38,7 @@ if dark_mode:
     .stApp { background:#0f1021; color:white; }
     .card { background:#1c1d3a; border-radius:14px; padding:20px;
             box-shadow:0 4px 20px rgba(0,0,0,.6); margin-bottom:20px; }
-    .section-title { color:#e4e4ff; font-size:18px; font-weight:600; }
+    .section-title { color:#e4e4ff; font-weight:600; }
     </style>
     """, unsafe_allow_html=True)
 else:
@@ -45,12 +47,12 @@ else:
     .stApp { background:#f6f7fb; }
     .card { background:white; border-radius:14px; padding:20px;
             box-shadow:0 4px 18px rgba(0,0,0,.06); margin-bottom:20px; }
-    .section-title { color:#222; font-size:18px; font-weight:600; }
+    .section-title { color:#222; font-weight:600; }
     </style>
     """, unsafe_allow_html=True)
 
 # =====================================================
-# SAFE LLM CALL
+# LLM CALL
 # =====================================================
 def llm(prompt: str) -> str:
     try:
@@ -60,65 +62,137 @@ def llm(prompt: str) -> str:
         )
         return res.choices[0].message.content.strip()
     except Exception as e:
-        st.error("LLM authentication / quota error")
+        st.error("LLM error")
         st.exception(e)
         return ""
 
 # =====================================================
-# SANITIZER (CRITICAL)
+# SANITIZER
 # =====================================================
 def sanitize(code: str) -> str:
     if "```" in code:
         code = code.replace("```python", "").replace("```", "")
-    # strip unsupported plotly features
-    code = code.replace("trendline='ols'", "")
-    code = code.replace('trendline="ols"', "")
-    code = code.replace("trendline='lowess'", "")
-    code = code.replace('trendline="lowess"', "")
+    for bad in ["trendline", "statsmodels", "sklearn"]:
+        code = code.replace(bad, "")
     return code.strip()
 
 # =====================================================
 # SESSION STATE
 # =====================================================
-for k in ["file_type", "df", "pdf_text", "dashboard_code", "chat"]:
+for k in ["df", "pdf_text", "dashboard_code", "chat"]:
     if k not in st.session_state:
         st.session_state[k] = None if k != "chat" else []
 
 # =====================================================
-# FILE UPLOAD
+# SIDEBAR – DATA SOURCE
 # =====================================================
-uploaded = st.sidebar.file_uploader(
-    "Upload CSV / Excel / PDF",
-    ["csv", "xlsx", "pdf"]
+st.sidebar.header("📊 Data Source")
+source = st.sidebar.radio(
+    "Choose data source",
+    [
+        "Upload File",
+        "Stock Market Data",
+        "Crypto Prices",
+        "Weather Data"
+    ]
 )
 
-if uploaded:
-    name = uploaded.name.lower()
+# =====================================================
+# FILE UPLOAD
+# =====================================================
+if source == "Upload File":
+    uploaded = st.sidebar.file_uploader(
+        "Upload CSV / Excel / PDF",
+        ["csv", "xlsx", "pdf"]
+    )
 
-    if name.endswith(".csv"):
-        st.session_state.df = pd.read_csv(uploaded)
-        st.session_state.file_type = "tabular"
-
-    elif name.endswith(".xlsx"):
-        st.session_state.df = pd.read_excel(uploaded)
-        st.session_state.file_type = "tabular"
-
-    elif name.endswith(".pdf"):
-        text = ""
-        with pdfplumber.open(uploaded) as pdf:
-            for p in pdf.pages:
-                text += p.extract_text() or ""
-        st.session_state.pdf_text = text[:12000]
-        st.session_state.file_type = "pdf"
+    if uploaded:
+        name = uploaded.name.lower()
+        if name.endswith(".csv"):
+            st.session_state.df = pd.read_csv(uploaded)
+        elif name.endswith(".xlsx"):
+            st.session_state.df = pd.read_excel(uploaded)
+        elif name.endswith(".pdf"):
+            text = ""
+            with pdfplumber.open(uploaded) as pdf:
+                for p in pdf.pages:
+                    text += p.extract_text() or ""
+            st.session_state.pdf_text = text[:12000]
 
 # =====================================================
-# SYSTEM-CONTROLLED SLICERS (POWER BI STYLE)
+# STOCK MARKET API (Yahoo Finance)
 # =====================================================
-def apply_slicers(df: pd.DataFrame) -> pd.DataFrame:
+if source == "Stock Market Data":
+    symbol = st.sidebar.text_input("Stock Symbol", "AAPL")
+    period = st.sidebar.selectbox(
+        "Period", ["1mo", "3mo", "6mo", "1y", "2y"]
+    )
+    if st.sidebar.button("📈 Fetch Stock Data"):
+        data = yf.download(symbol, period=period)
+        data.reset_index(inplace=True)
+        st.session_state.df = data
+
+# =====================================================
+# CRYPTO API (CoinGecko)
+# =====================================================
+if source == "Crypto Prices":
+    coin = st.sidebar.text_input("Coin ID", "bitcoin")
+    days = st.sidebar.selectbox("Days", [7, 30, 90, 365])
+
+    if st.sidebar.button("💱 Fetch Crypto Data"):
+        url = f"https://api.coingecko.com/api/v3/coins/{coin}/market_chart"
+        params = {"vs_currency": "usd", "days": days}
+        r = requests.get(url, params=params).json()
+
+        df = pd.DataFrame(r["prices"], columns=["timestamp", "price"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        st.session_state.df = df
+
+# =====================================================
+# WEATHER API (Open-Meteo)
+# =====================================================
+if source == "Weather Data":
+    city = st.sidebar.text_input("City (lat,lon)", "12.97,77.59")
+    days = st.sidebar.selectbox("Days", [3, 7, 14])
+
+    if st.sidebar.button("🌦️ Fetch Weather Data"):
+        lat, lon = city.split(",")
+        url = "https://api.open-meteo.com/v1/forecast"
+        params = {
+            "latitude": lat,
+            "longitude": lon,
+            "hourly": "temperature_2m",
+            "forecast_days": days
+        }
+        r = requests.get(url, params=params).json()
+        df = pd.DataFrame({
+            "time": r["hourly"]["time"],
+            "temperature": r["hourly"]["temperature_2m"]
+        })
+        df["time"] = pd.to_datetime(df["time"])
+        st.session_state.df = df
+
+# =====================================================
+# DATA CLEANING
+# =====================================================
+if st.session_state.df is not None:
+    st.sidebar.header("🧹 Data Cleaning")
+    if st.sidebar.button("Clean Dataset"):
+        df = st.session_state.df.copy()
+        df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+        df.drop_duplicates(inplace=True)
+        df.fillna(method="ffill", inplace=True)
+        st.session_state.df = df
+        st.sidebar.success("Dataset cleaned")
+
+# =====================================================
+# SLICERS
+# =====================================================
+def apply_slicers(df):
     st.markdown("<div class='section-title'>Filters</div>", unsafe_allow_html=True)
     filtered = df.copy()
 
-    for col in df.columns[:3]:  # limit slicers for stability
+    for col in df.columns[:3]:
         if pd.api.types.is_numeric_dtype(df[col]):
             mn, mx = float(df[col].min()), float(df[col].max())
             rng = st.slider(col, mn, mx, (mn, mx))
@@ -130,109 +204,66 @@ def apply_slicers(df: pd.DataFrame) -> pd.DataFrame:
     return filtered
 
 # =====================================================
-# UI TABS
+# TABS
 # =====================================================
 summary_tab, dashboard_tab, chat_tab = st.tabs(
     ["📌 Summary", "📊 Dashboard", "💬 Chat"]
 )
 
 # =====================================================
-# SUMMARY TAB
+# SUMMARY
 # =====================================================
 with summary_tab:
-    if st.session_state.file_type == "tabular":
+    if st.session_state.df is not None:
         df = st.session_state.df
-        st.markdown(
-            llm(
-                f"""
-You are a data analyst.
-
-Summarize the dataset and suggest exactly 3 business questions.
-
-Columns: {list(df.columns)}
-Rows: {len(df)}
-"""
-            )
-        )
-    elif st.session_state.file_type == "pdf":
-        st.markdown(
-            llm(
-                f"""
-Summarize the document and suggest 3 questions.
-
-Document:
-{st.session_state.pdf_text}
-"""
-            )
-        )
+        st.markdown(llm(
+            f"Summarize the dataset and suggest 3 business questions.\nColumns: {list(df.columns)}"
+        ))
 
 # =====================================================
-# DASHBOARD TAB (LLM CODE → EXECUTION)
+# DASHBOARD
 # =====================================================
 with dashboard_tab:
-    if st.session_state.file_type == "tabular":
+    if st.session_state.df is not None:
         df = st.session_state.df
         filtered_df = apply_slicers(df)
 
-        if filtered_df.empty:
-            st.warning("No data available for selected filters.")
-        else:
-            if st.button("🚀 Generate Dashboard") or st.session_state.dashboard_code is None:
-
-                dashboard_prompt = """
+        if st.button("🚀 Generate Dashboard") or st.session_state.dashboard_code is None:
+            dashboard_prompt = """
 You are a BI dashboard developer.
 
 DATA:
-- filtered_df (already filtered pandas DataFrame)
+- filtered_df (pandas DataFrame)
 
-ABSOLUTE RULES:
-- DO NOT assume column names
-- Detect columns dynamically:
-    num_cols = filtered_df.select_dtypes(include='number').columns
-    cat_cols = filtered_df.select_dtypes(exclude='number').columns
-- DO NOT use trendlines, regression, statsmodels, sklearn
-- Use Plotly Express only: bar, line, scatter (no trendline), pie, histogram
-- All variables must be defined
-- NO markdown fences
-
-STYLE RULES:
-- Wrap visuals in <div class="card">
-- Use <div class="section-title">
-- Use st.columns for layout
+RULES:
+- Dynamically detect columns
+- No trendlines or advanced stats
+- Use Plotly Express only
+- Use <div class="card">
+- Use st.columns layout
 
 TASK:
-1. Create 3 KPI cards from numeric columns
-2. Create 1 main chart
-3. Create 1–2 secondary charts
+1. KPI cards (3)
+2. Main chart
+3. Secondary chart
 
 Output ONLY executable Python code.
 """
+            st.session_state.dashboard_code = llm(dashboard_prompt)
 
-                st.session_state.dashboard_code = llm(dashboard_prompt)
-
-            if filtered_df.select_dtypes(include="number").empty:
-                st.warning("No numeric columns available for KPIs.")
-            else:
-                try:
-                    exec(
-                        sanitize(st.session_state.dashboard_code),
-                        {},
-                        {
-                            "st": st,
-                            "filtered_df": filtered_df,
-                            "px": px,
-                            "pd": pd,
-                        },
-                    )
-                except Exception as e:
-                    st.error("Dashboard execution failed")
-                    st.code(st.session_state.dashboard_code, language="python")
-                    st.exception(e)
-    else:
-        st.info("Dashboards are not supported for PDFs.")
+        try:
+            exec(
+                sanitize(st.session_state.dashboard_code),
+                {},
+                {"st": st, "filtered_df": filtered_df, "px": px, "pd": pd}
+            )
+        except Exception as e:
+            st.error("Dashboard execution failed")
+            st.code(st.session_state.dashboard_code)
+            st.exception(e)
 
 # =====================================================
-# CHAT TAB (HUMAN LANGUAGE ONLY)
+# CHATBOT
 # =====================================================
 with chat_tab:
     for m in st.session_state.chat:
@@ -242,39 +273,12 @@ with chat_tab:
 
     if q:
         st.session_state.chat.append({"role": "user", "content": q})
-
-        if st.session_state.file_type == "tabular":
-            prompt = f"""
-You are a business analyst.
-
-Answer the question in clear human language.
-Use the dataset internally.
-DO NOT show code.
-
-Question:
-{q}
-"""
-        else:
-            prompt = f"""
-Answer using the document only.
-
-Document:
-{st.session_state.pdf_text}
-
-Question:
-{q}
-"""
-
-        ans = llm(prompt)
-
-        if "```" in ans or "df[" in ans:
-            ans = "Here is the answer in simple terms:\n\n" + ans.replace("```", "")
-
+        ans = llm(f"Answer clearly in human language:\n{q}")
         st.session_state.chat.append({"role": "assistant", "content": ans})
         st.chat_message("assistant").markdown(ans)
 
 # =====================================================
 # EMPTY STATE
 # =====================================================
-if not uploaded:
-    st.info("⬅️ Upload a CSV, Excel, or PDF to begin.")
+if st.session_state.df is None:
+    st.info("⬅️ Select a data source to begin.")
