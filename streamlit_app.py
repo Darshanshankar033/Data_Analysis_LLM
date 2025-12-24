@@ -29,44 +29,38 @@ dark_mode = st.sidebar.toggle("🌙 Dark Mode Preview", value=False)
 if dark_mode:
     st.markdown("""
     <style>
-    .stApp { background-color:#0f1021; color:white; }
+    .stApp { background:#0f1021; color:white; }
     .card { background:#1c1d3a; border-radius:14px; padding:20px;
             box-shadow:0 4px 20px rgba(0,0,0,.6); margin-bottom:20px; }
-    .section-title { color:#e4e4ff; font-size:18px; font-weight:600; }
+    .section-title { color:#e4e4ff; font-weight:600; }
     </style>
     """, unsafe_allow_html=True)
 else:
     st.markdown("""
     <style>
-    .stApp { background-color:#f6f7fb; }
+    .stApp { background:#f6f7fb; }
     .card { background:white; border-radius:14px; padding:20px;
             box-shadow:0 4px 18px rgba(0,0,0,.06); margin-bottom:20px; }
-    .section-title { color:#222; font-size:18px; font-weight:600; }
+    .section-title { color:#222; font-weight:600; }
     </style>
     """, unsafe_allow_html=True)
 
 # =====================================================
-# SAFE LLM CALL
+# LLM CALL
 # =====================================================
-def llm(prompt: str) -> str:
-    try:
-        res = client.chat.completions.create(
-            model=MODEL,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return res.choices[0].message.content.strip()
-    except Exception as e:
-        st.error("LLM Error")
-        st.exception(e)
-        return ""
+def llm(prompt):
+    res = client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return res.choices[0].message.content.strip()
 
 # =====================================================
 # SANITIZER
 # =====================================================
-def sanitize(code: str) -> str:
+def sanitize(code):
     if "```" in code:
         code = code.replace("```python", "").replace("```", "")
-    code = code.replace(":,.2f", "")
     return code.strip()
 
 # =====================================================
@@ -100,13 +94,13 @@ if uploaded:
         st.session_state.file_type = "pdf"
 
 # =====================================================
-# SYSTEM-CONTROLLED SLICERS (STABLE)
+# SAFE SLICERS
 # =====================================================
-def apply_slicers(df: pd.DataFrame) -> pd.DataFrame:
+def apply_slicers(df):
     st.markdown("<div class='section-title'>Filters</div>", unsafe_allow_html=True)
     filtered = df.copy()
 
-    for col in df.columns[:3]:  # limit slicers
+    for col in df.columns[:3]:
         if pd.api.types.is_numeric_dtype(df[col]):
             mn, mx = float(df[col].min()), float(df[col].max())
             rng = st.slider(col, mn, mx, (mn, mx))
@@ -139,7 +133,7 @@ with summary_tab:
         ))
 
 # =====================================================
-# DASHBOARD (LLM-GENERATED CODE + EXECUTION)
+# DASHBOARD
 # =====================================================
 with dashboard_tab:
     if st.session_state.file_type == "tabular":
@@ -150,49 +144,26 @@ with dashboard_tab:
             st.warning("No data available for selected filters.")
         else:
             if st.button("🚀 Generate Dashboard") or st.session_state.dashboard_code is None:
-
-                dashboard_prompt = f"""
-You are a BI dashboard developer.
-
-You MUST generate executable Python code.
-
-DATA:
-- filtered_df (already filtered)
-
-RULES:
-- Use filtered_df ONLY
-- Use st.markdown + <div class="card">
-- Use st.columns for layout
-- Use Plotly Express charts
-- All variables must be defined
-- NO markdown fences
-
-TASK:
-1. KPI row (3–4 metrics)
-2. Main chart
-3. Secondary charts
-
-Output ONLY Python code.
-"""
-
                 st.session_state.dashboard_code = llm(dashboard_prompt)
 
-            try:
-                exec(
-                    sanitize(st.session_state.dashboard_code),
-                    {},
-                    {"st": st, "filtered_df": filtered_df, "px": px, "pd": pd}
-                )
-            except Exception as e:
-                st.error("Dashboard execution failed")
-                st.code(st.session_state.dashboard_code, language="python")
-                st.exception(e)
-
+            if filtered_df.select_dtypes(include="number").empty:
+                st.warning("No numeric columns available for KPIs.")
+            else:
+                try:
+                    exec(
+                        sanitize(st.session_state.dashboard_code),
+                        {},
+                        {"st": st, "filtered_df": filtered_df, "px": px, "pd": pd}
+                    )
+                except Exception as e:
+                    st.error("Dashboard execution failed")
+                    st.code(st.session_state.dashboard_code, language="python")
+                    st.exception(e)
     else:
         st.info("Dashboards are not supported for PDFs.")
 
 # =====================================================
-# CHAT (HUMAN LANGUAGE ONLY)
+# CHAT
 # =====================================================
 with chat_tab:
     for m in st.session_state.chat:
@@ -202,31 +173,7 @@ with chat_tab:
 
     if q:
         st.session_state.chat.append({"role": "user", "content": q})
-
-        if st.session_state.file_type == "tabular":
-            prompt = f"""
-Answer in clear human language.
-Do NOT show code.
-
-Question:
-{q}
-"""
-        else:
-            prompt = f"""
-Answer using only the document content.
-
-Document:
-{st.session_state.pdf_text}
-
-Question:
-{q}
-"""
-
-        ans = llm(prompt)
-
-        if "```" in ans or "df[" in ans:
-            ans = "Here is the answer in simple terms:\n\n" + ans.replace("```", "")
-
+        ans = llm(f"Answer in clear human language:\n{q}")
         st.session_state.chat.append({"role": "assistant", "content": ans})
         st.chat_message("assistant").markdown(ans)
 
