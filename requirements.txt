@@ -7,3 +7,5 @@ pdfplumber
 matplotlib
 seaborn
 plotly
+yfinance
+requests
