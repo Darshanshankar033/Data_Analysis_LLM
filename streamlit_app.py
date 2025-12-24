@@ -48,7 +48,7 @@ else:
 # =====================================================
 # LLM CALL
 # =====================================================
-def llm(prompt):
+def llm(prompt: str) -> str:
     res = client.chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}]
@@ -58,7 +58,7 @@ def llm(prompt):
 # =====================================================
 # SANITIZER
 # =====================================================
-def sanitize(code):
+def sanitize(code: str) -> str:
     if "```" in code:
         code = code.replace("```python", "").replace("```", "")
     return code.strip()
@@ -94,7 +94,7 @@ if uploaded:
         st.session_state.file_type = "pdf"
 
 # =====================================================
-# SAFE SLICERS
+# SAFE SLICERS (SYSTEM-CONTROLLED)
 # =====================================================
 def apply_slicers(df):
     st.markdown("<div class='section-title'>Filters</div>", unsafe_allow_html=True)
@@ -133,7 +133,7 @@ with summary_tab:
         ))
 
 # =====================================================
-# DASHBOARD
+# DASHBOARD (LLM CODE → EXECUTION)
 # =====================================================
 with dashboard_tab:
     if st.session_state.file_type == "tabular":
@@ -144,6 +144,34 @@ with dashboard_tab:
             st.warning("No data available for selected filters.")
         else:
             if st.button("🚀 Generate Dashboard") or st.session_state.dashboard_code is None:
+
+                # ✅ DEFINE PROMPT BEFORE USE (FIX)
+                dashboard_prompt = """
+You are a BI dashboard developer.
+
+DATA:
+- filtered_df (already filtered pandas DataFrame)
+
+ABSOLUTE RULES:
+- DO NOT assume column names
+- Dynamically select columns
+  num_cols = filtered_df.select_dtypes(include='number').columns
+  cat_cols = filtered_df.select_dtypes(exclude='number').columns
+
+STYLE:
+- Use <div class="card">
+- Use <div class="section-title">
+- Use st.columns layout
+- Use Plotly Express
+
+TASK:
+1. 3 KPI cards using numeric columns
+2. 1 main chart
+3. 1–2 secondary charts
+
+Output ONLY executable Python code.
+"""
+
                 st.session_state.dashboard_code = llm(dashboard_prompt)
 
             if filtered_df.select_dtypes(include="number").empty:
@@ -163,7 +191,7 @@ with dashboard_tab:
         st.info("Dashboards are not supported for PDFs.")
 
 # =====================================================
-# CHAT
+# CHAT (HUMAN LANGUAGE ONLY)
 # =====================================================
 with chat_tab:
     for m in st.session_state.chat:
