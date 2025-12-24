@@ -21,7 +21,7 @@ st.title("🤖 LLM-Powered Chatbot for Interactive Data Analysis and Visualizati
 # =====================================================
 # API CONFIG (OPENROUTER)
 # =====================================================
-OPENROUTER_API_KEY = "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"
+OPENROUTER_API_KEY = "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"
 MODEL = "openai/gpt-oss-20b:free"
 
 client = OpenAI(
