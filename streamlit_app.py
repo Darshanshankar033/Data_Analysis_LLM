@@ -22,40 +22,33 @@ st.set_page_config(page_title="AI BI Dashboard", layout="wide")
 st.title("🤖 AI-Generated BI Dashboard")
 
 # =====================================================
-# THEME PREVIEW TOGGLE
+# THEME PREVIEW
 # =====================================================
 dark_mode = st.sidebar.toggle("🌙 Dark Mode Preview", value=False)
 
-# =====================================================
-# GLOBAL STYLING
-# =====================================================
 if dark_mode:
     st.markdown("""
     <style>
-    .stApp { background-color: #0f1021; color: white; }
-    .card { background: #1c1d3a; border-radius: 14px; padding: 20px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.6); margin-bottom: 20px; }
-    .card-title { color: #b5b5ff; }
-    .card-value { color: white; }
-    .section-title { color: #e4e4ff; }
+    .stApp { background-color:#0f1021; color:white; }
+    .card { background:#1c1d3a; border-radius:14px; padding:20px;
+            box-shadow:0 4px 20px rgba(0,0,0,.6); margin-bottom:20px; }
+    .section-title { color:#e4e4ff; font-size:18px; font-weight:600; }
     </style>
     """, unsafe_allow_html=True)
 else:
     st.markdown("""
     <style>
-    .stApp { background-color: #f6f7fb; }
-    .card { background: white; border-radius: 14px; padding: 20px;
-            box-shadow: 0 4px 18px rgba(0,0,0,0.06); margin-bottom: 20px; }
-    .card-title { color: #777; }
-    .card-value { color: #222; }
-    .section-title { color: #222; }
+    .stApp { background-color:#f6f7fb; }
+    .card { background:white; border-radius:14px; padding:20px;
+            box-shadow:0 4px 18px rgba(0,0,0,.06); margin-bottom:20px; }
+    .section-title { color:#222; font-size:18px; font-weight:600; }
     </style>
     """, unsafe_allow_html=True)
 
 # =====================================================
 # SAFE LLM CALL
 # =====================================================
-def llm(prompt):
+def llm(prompt: str) -> str:
     try:
         res = client.chat.completions.create(
             model=MODEL,
@@ -70,9 +63,10 @@ def llm(prompt):
 # =====================================================
 # SANITIZER
 # =====================================================
-def sanitize(code):
+def sanitize(code: str) -> str:
     if "```" in code:
         code = code.replace("```python", "").replace("```", "")
+    code = code.replace(":,.2f", "")
     return code.strip()
 
 # =====================================================
@@ -106,6 +100,24 @@ if uploaded:
         st.session_state.file_type = "pdf"
 
 # =====================================================
+# SYSTEM-CONTROLLED SLICERS (STABLE)
+# =====================================================
+def apply_slicers(df: pd.DataFrame) -> pd.DataFrame:
+    st.markdown("<div class='section-title'>Filters</div>", unsafe_allow_html=True)
+    filtered = df.copy()
+
+    for col in df.columns[:3]:  # limit slicers
+        if pd.api.types.is_numeric_dtype(df[col]):
+            mn, mx = float(df[col].min()), float(df[col].max())
+            rng = st.slider(col, mn, mx, (mn, mx))
+            filtered = filtered[(filtered[col] >= rng[0]) & (filtered[col] <= rng[1])]
+        elif df[col].nunique() <= 20:
+            opts = st.multiselect(col, df[col].unique(), df[col].unique())
+            filtered = filtered[filtered[col].isin(opts)]
+
+    return filtered
+
+# =====================================================
 # TABS
 # =====================================================
 summary_tab, dashboard_tab, chat_tab = st.tabs(
@@ -118,62 +130,64 @@ summary_tab, dashboard_tab, chat_tab = st.tabs(
 with summary_tab:
     if st.session_state.file_type == "tabular":
         df = st.session_state.df
-        st.markdown(llm(f"Summarize the dataset and suggest 3 business questions.\nColumns: {list(df.columns)}"))
+        st.markdown(llm(
+            f"Summarize the dataset and suggest 3 business questions.\nColumns: {list(df.columns)}"
+        ))
     elif st.session_state.file_type == "pdf":
-        st.markdown(llm(f"Summarize the document:\n{st.session_state.pdf_text}"))
+        st.markdown(llm(
+            f"Summarize this document:\n{st.session_state.pdf_text}"
+        ))
 
 # =====================================================
-# DASHBOARD WITH SLICERS (LLM-GENERATED)
+# DASHBOARD (LLM-GENERATED CODE + EXECUTION)
 # =====================================================
 with dashboard_tab:
     if st.session_state.file_type == "tabular":
         df = st.session_state.df
+        filtered_df = apply_slicers(df)
 
-        if st.button("🚀 Generate Styled Dashboard with Slicers") or st.session_state.dashboard_code is None:
+        if filtered_df.empty:
+            st.warning("No data available for selected filters.")
+        else:
+            if st.button("🚀 Generate Dashboard") or st.session_state.dashboard_code is None:
 
-            dashboard_prompt = f"""
-You are a BI dashboard designer.
+                dashboard_prompt = f"""
+You are a BI dashboard developer.
 
-You MUST generate a styled Streamlit dashboard WITH SLICERS.
+You MUST generate executable Python code.
 
-AVAILABLE:
-- st.selectbox, st.multiselect, st.slider
-- df (original dataframe)
-- filtered_df (you must create this)
-- px for charts
+DATA:
+- filtered_df (already filtered)
 
-MANDATORY STEPS:
-1. Identify 2–3 important slicer columns
-2. Create slicers at the TOP of the dashboard
-3. Filter df into filtered_df based on slicers
-4. Use filtered_df for ALL KPIs and charts
+RULES:
+- Use filtered_df ONLY
+- Use st.markdown + <div class="card">
+- Use st.columns for layout
+- Use Plotly Express charts
+- All variables must be defined
+- NO markdown fences
 
-STYLE RULES:
-- Wrap visuals in <div class="card">
-- Use <div class="section-title"> headings
-- Grid layout using st.columns
+TASK:
+1. KPI row (3–4 metrics)
+2. Main chart
+3. Secondary charts
 
-DATA RULES:
-- Valid Python only
-- No markdown fences
-- Aggregations allowed
-- Full dataset access
-
-Output ONLY executable Python code.
+Output ONLY Python code.
 """
 
-            st.session_state.dashboard_code = llm(dashboard_prompt)
+                st.session_state.dashboard_code = llm(dashboard_prompt)
 
-        try:
-            exec(
-                sanitize(st.session_state.dashboard_code),
-                {},
-                {"st": st, "df": df, "px": px, "pd": pd}
-            )
-        except Exception as e:
-            st.error("Dashboard execution failed")
-            st.code(st.session_state.dashboard_code, language="python")
-            st.exception(e)
+            try:
+                exec(
+                    sanitize(st.session_state.dashboard_code),
+                    {},
+                    {"st": st, "filtered_df": filtered_df, "px": px, "pd": pd}
+                )
+            except Exception as e:
+                st.error("Dashboard execution failed")
+                st.code(st.session_state.dashboard_code, language="python")
+                st.exception(e)
+
     else:
         st.info("Dashboards are not supported for PDFs.")
 
@@ -191,10 +205,7 @@ with chat_tab:
 
         if st.session_state.file_type == "tabular":
             prompt = f"""
-You are a business analyst.
-
-Answer the question in clear human language.
-Use the dataset internally.
+Answer in clear human language.
 Do NOT show code.
 
 Question:
@@ -202,7 +213,7 @@ Question:
 """
         else:
             prompt = f"""
-Answer using the document only.
+Answer using only the document content.
 
 Document:
 {st.session_state.pdf_text}
